@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+import os
+import sys
+import argparse
+import json
+import uuid
+import re
+import shutil
+
+whoami = os.path.basename(sys.argv[0])
+
+
+def json_dumps(data):
+    return json.dumps(data, sort_keys=False, indent=2, separators=(',', ': '))
+
+
+class Main:
+    TF_STATE_VERSION = 4
+
+    def main(self, args=sys.argv[1:], prog=whoami):
+        options = self.parse_args(args, prog)
+        self.top(options)
+
+    def parse_args(self, args, prog):
+        parser = argparse.ArgumentParser(
+            prog=prog,
+            description='Split/merge terraform state',
+        )
+        parser.add_argument('--state',
+                            help='state file',
+                            required=True)
+        parser.add_argument('--dir',
+                            help='output directory',
+                            required=True)
+        parser.add_argument('--action',
+                            help='action',
+                            required=True,
+                            choices=['split', 'merge'])
+        return parser.parse_args(args)
+
+    def top(self, options):
+        if options.action == 'split':
+            self.split(options)
+        else:
+            self.merge(options)
+
+    def split(self, options):
+        with open(options.state, 'r') as f:
+            data = json.loads(f.read())
+
+        if data['version'] != 4:
+            exit(f'{whoami}: this code was written for terraform state'
+                 f' version {self.TF_STATE_VERSION}. It needs to be verified'
+                 ' for a different version.')
+        marker = os.path.join(options.dir, '.tf-split')
+        if os.path.isdir(options.dir):
+            if not os.path.exists(marker):
+                exit(f'{whoami}: {options.dir} exists and'
+                     ' does not look like a tf-split directory')
+            shutil.rmtree(options.dir)
+        os.makedirs(options.dir)
+        with open(marker, 'w') as f:
+            pass
+
+        for r in data['resources']:
+            if r['mode'] == 'data':
+                continue
+            module = r.get('module', '')
+            module_path = [
+                f'{m.group(1)}' for m in re.finditer(
+                    r'(module\.[^\.]+?(?:\[(?:\d+|\"[^\"\]]+\")\])?)(?=\.|$)',
+                    module)
+            ]
+            rtype = r['type']
+            name = r['name']
+            if '/' in '.'.join([*module_path, rtype, name]):
+                # I haven't bothered to do any kind of character
+                # quoting because it should be fairly rare to have a
+                # slash character in a resource or module name, and
+                # they should never appear in a resource type. If we
+                # were to find this case, it would be sufficient to
+                # apply some kind of quoting, such as URL quoting or
+                # similar, to prevent the resulting path from being
+                # invalid or ambiguous. The code on the merge side
+                # would also have to be updated.
+                exit(f'{whoami}: the / character appears in a'
+                     ' module, type, or name. See comments in code.')
+            if '.' in rtype or '.' in name:
+                # '.' should never apear in a resource type, and I
+                # think it's invalid in resource names as well. See
+                # comment above if otherwise.
+                exit(f'{whoami}: the . character appears in a'
+                     ' type or name. See comments in code.')
+            path = os.path.join(options.dir, *module_path, f'{rtype}.{name}')
+            os.makedirs(path, exist_ok=True)
+            with open(os.path.join(path, 'provider.json'), 'w') as f:
+                print(r['provider'], file=f, end='')
+            with open(os.path.join(path, 'version.json'), 'w') as f:
+                # Every directory gets this file since any directory
+                # could be the root of a new state file.
+                print(data['terraform_version'], file=f, end='')
+            for i in r['instances']:
+                key = 'resource'
+                if 'index_key' in i:
+                    ikey = i['index_key']
+                    if isinstance(ikey, int):
+                        key = f'count.{ikey}'
+                    else:
+                        key = f'each.{ikey}'
+                    del i['index_key']
+                if 'dependencies' in i:
+                    i['dependencies'] = []
+                with open(os.path.join(path, f'{key}.json'), 'w') as f:
+                    print(json_dumps(i), file=f)
+
+    def merge(self, options):
+        instances = {}
+        tf_version = None
+        for curdir, subdirs, files in os.walk(options.dir):
+            relpath = os.path.relpath(curdir, options.dir)
+            if not os.path.exists(os.path.join(curdir, 'provider.json')):
+                continue
+            instances[relpath] = files
+            if tf_version is None:
+                try:
+                    with open(os.path.join(curdir, 'version.json'), 'r') as f:
+                        tf_version = f.read()
+                except Exception:
+                    pass
+        if tf_version is None:
+            exit(f'{whoami}: unable to find terraform version in input')
+
+        state = {
+            'version': self.TF_STATE_VERSION,
+            'terraform_version': tf_version,
+            'serial': 1,
+            'lineage': str(uuid.uuid4()),
+            'outputs': {},
+        }
+
+        resources = []
+        for d, files in instances.items():
+            # The split code verifies that / doesn't appear in modules
+            # and that . doesn't appear in resource names or types.
+            module = os.path.dirname(d).replace('/', '.')
+            nametype = os.path.basename(d)
+            (itype, name) = nametype.split('.')
+            path = os.path.join(options.dir, d)
+            with open(os.path.join(path, 'provider.json'), 'r') as f:
+                provider = f.read()
+            # We are trying to keep fields in the same order is in the
+            # state file (to make it easier to diff), which is why we
+            # add `module` unconditionally and then delete it if empty
+            # rather than adding it conditionally. The same reasoning
+            # applies to index_key below.
+            resource = {
+                'module': module,
+                'mode': 'managed',
+                'type': itype,
+                'name': name,
+                'provider': provider,
+            }
+            if module == '':
+                del resource['module']
+            instances = []
+            for i in files:
+                if i in ['provider.json', 'version.json']:
+                    continue
+                rdata = {'index_key': None}
+                with open(os.path.join(path, i), 'r') as f:
+                    rdata.update(json.loads(f.read()))
+                m = re.match(r'^(count|each)\.(.*)\.json$', i)
+                if m:
+                    if m.group(1) == 'count':
+                        rdata['index_key'] = int(m.group(2))
+                    else:
+                        rdata['index_key'] = m.group(2)
+                else:
+                    del rdata['index_key']
+                instances.append(rdata)
+            resource['instances'] = instances
+            resources.append(resource)
+        state['resources'] = resources
+        with open(options.state, 'w') as f:
+            print(json_dumps(state), file=f)
+
+
+if __name__ == '__main__':
+    try:
+        Main().main()
+    except KeyboardInterrupt:
+        exit(130)
