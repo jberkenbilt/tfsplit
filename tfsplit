@@ -44,6 +44,14 @@ class Main:
         else:
             self.merge(options)
 
+    @staticmethod
+    def path_quote(s):
+        return re.sub(r'[#/]', lambda m: '#' + str(ord(m.group(0))) + '#', s)
+
+    @staticmethod
+    def path_unquote(s):
+        return re.sub(r'#(\d+)#', lambda m: chr(int(m.group(1))), s)
+
     def split(self, options):
         with open(options.state, 'r') as f:
             data = json.loads(f.read())
@@ -72,19 +80,8 @@ class Main:
                     module)
             ]
             rtype = r['type']
-            name = r['name']
-            if '/' in '.'.join([*module_path, rtype, name]):
-                # I haven't bothered to do any kind of character
-                # quoting because it should be fairly rare to have a
-                # slash character in a resource or module name, and
-                # they should never appear in a resource type. If we
-                # were to find this case, it would be sufficient to
-                # apply some kind of quoting, such as URL quoting or
-                # similar, to prevent the resulting path from being
-                # invalid or ambiguous. The code on the merge side
-                # would also have to be updated.
-                exit(f'{whoami}: the / character appears in a'
-                     ' module, type, or name. See comments in code.')
+            name = self.path_quote(r['name'])
+            module_path = list([self.path_quote(x) for x in module_path])
             if '.' in rtype or '.' in name:
                 # '.' should never apear in a resource type, and I
                 # think it's invalid in resource names as well. See
@@ -108,6 +105,7 @@ class Main:
                     else:
                         key = f'each.{ikey}'
                     del i['index_key']
+                key = self.path_quote(key)
                 if 'dependencies' in i:
                     i['dependencies'] = []
                 with open(os.path.join(path, f'{key}.json'), 'w') as f:
@@ -142,9 +140,10 @@ class Main:
         for d, files in instances.items():
             # The split code verifies that / doesn't appear in modules
             # and that . doesn't appear in resource names or types.
-            module = os.path.dirname(d).replace('/', '.')
+            module = self.path_unquote(os.path.dirname(d).replace('/', '.'))
             nametype = os.path.basename(d)
             (itype, name) = nametype.split('.')
+            name = self.path_unquote(name)
             path = os.path.join(options.dir, d)
             with open(os.path.join(path, 'provider.json'), 'r') as f:
                 provider = f.read()
@@ -174,7 +173,7 @@ class Main:
                     if m.group(1) == 'count':
                         rdata['index_key'] = int(m.group(2))
                     else:
-                        rdata['index_key'] = m.group(2)
+                        rdata['index_key'] = self.path_unquote(m.group(2))
                 else:
                     del rdata['index_key']
                 instances.append(rdata)
