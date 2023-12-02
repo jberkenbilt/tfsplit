@@ -55,4 +55,4 @@ As of the initial implementation, there are no automated tests, but the `tests/t
 
 # Notes
 
-The new state file has a random `"lineage"` uuid and a serial number of 1. If you are using this to refactor an existing project rather than creating a new one, copy `"lineage"` from the old project and set `"serial"` to the next higher number from the old state. Then you can use `terraform state push` to overwrite the old state with the new state.
+The new state file has a random `"lineage"` uuid and a serial number of 1. If you are using this to refactor an existing project rather than creating a new one, use `--serial-from old.tfstate`, which copies `"lineage"` from the old project and sets `"serial"` to the next higher number from the old state. Then you can use `terraform state push` to overwrite the old state with the new state.

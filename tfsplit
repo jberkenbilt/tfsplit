@@ -36,6 +36,8 @@ class Main:
                             help='action',
                             required=True,
                             choices=['split', 'merge'])
+        parser.add_argument('--serial-from',
+                            help='file to get serial from on merge')
         return parser.parse_args(args)
 
     def top(self, options):
@@ -128,11 +130,20 @@ class Main:
         if tf_version is None:
             exit(f'{whoami}: unable to find terraform version in input')
 
+        if options.serial_from:
+            with open(options.serial_from, 'r') as f:
+                old = json.loads(f.read())
+            serial = 1 + old['serial']
+            lineage = old['lineage']
+        else:
+            serial = 1
+            lineage = str(uuid.uuid4())
+
         state = {
             'version': self.TF_STATE_VERSION,
             'terraform_version': tf_version,
-            'serial': 1,
-            'lineage': str(uuid.uuid4()),
+            'serial': serial,
+            'lineage': lineage,
             'outputs': {},
         }
 
