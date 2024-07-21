@@ -6,6 +6,8 @@ This tool splits a terraform state file into a directory structure containing se
 
 Splitting a project into multiple projects, merging projects, or moving objects from one project to another is much easier using this approach than manually editing state files or using mixtures of `terrform state` and `terraform import` commands.
 
+Data sources and outputs are not preserved, so it is necessary to run `terraform apply` on the resulting project.
+
 # Examples
 
 * Splitting a for_each into separate projects:

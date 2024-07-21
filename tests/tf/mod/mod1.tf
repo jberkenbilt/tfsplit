@@ -24,11 +24,6 @@ resource "local_file" "mod_foreach_file" {
   content  = "prefix=${var.prefix}: key=${each.key}, value=${each.value}\n"
 }
 
-output "name" {
-  value     = local_file.mod_count_file[0].filename
-  sensitive = true
-}
-
 module "mod_single_mod" {
   source = "./mod"
   prefix = "mod2"

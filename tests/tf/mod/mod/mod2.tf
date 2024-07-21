@@ -23,8 +23,3 @@ resource "local_file" "mod2_foreach_file" {
   filename = "auto/mod2-${var.prefix}-${each.key}-${each.value}"
   content  = "mod2: prefix=${var.prefix}, key=${each.key}, value=${each.value}\n"
 }
-
-output "name" {
-  value     = local_file.mod2_count_file[0].filename
-  sensitive = true
-}

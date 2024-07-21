@@ -1,0 +1,128 @@
+#!/bin/bash
+
+tf=$TF_COMMAND
+if [[ $tf == "" ]]; then
+    if tofu -version >/dev/null 2>&1; then
+        tf=tofu
+    elif terraform -version >/dev/null 2>&1; then
+        tf=terraform
+    else
+        echo 1>&2 "TF_COMMAND is not set and neither tofu nor terraform are in path"
+        exit 2
+    fi
+fi
+
+set -e
+cd $(dirname $0)
+dir=test-work
+rm -rf $dir
+mkdir $dir
+out=$dir/log
+cp /dev/null $out
+printf "\e[35mRunning tests with $tf; detailed output in $out\e[0m\n"
+out=$(pwd)/$out
+dir=$(pwd)/$dir
+tfsplit=$(pwd)/tfsplit
+
+log() {
+    echo "$@" >> $out
+}
+message() {
+    echo "$@"
+    log "--- $@"
+}
+
+log "tf command: $tf"
+
+passes=0
+fails=0
+tf() {
+    log "--- $tf $@"
+    $tf "$@" >> $out 2>&1
+}
+tfsplit() {
+    log "--- tfsplit $@"
+    $tfsplit "$@" >> $out 2>&1
+}
+fail() {
+    printf "\e[31mFAIL: ${1}\e[0m\n"
+    log "*** FAIL: $1"
+    fails=$((fails+1))
+}
+pass() {
+    printf "\e[32mPASS: ${1}\e[0m\n"
+    log "*** PASS: $1"
+    passes=$((passes+1))
+}
+
+
+# Apply project, split state, and check resources.
+
+cp -a tests/tf $dir/00
+cd $dir/00
+
+message "applying original project $dir/00"
+tf init
+tf apply -auto-approve
+message "comparing state with split output"
+$tf state ls | grep -v -F data. | sort >| out.state
+$tf state pull >| a.tfstate
+tfsplit --action split --dir z --state a.tfstate
+find z -type f -print | \
+    sed -e 's,z/,,' | \
+    sed -e 's,[\./]resource.json,,' | \
+    sed -e 's,[\./]count\.\(.*\)\.json,[\1],' | \
+    sed -e 's,[\./]each\.\(.*\)\.json,["\1"],' | \
+    sed -e 's,/,.,g' | \
+    grep -v -F .json | \
+    grep -v -F .tf-split | \
+    sort >| out.split
+log "differences:"
+if diff >>$out 2>&1 out.state out.split; then
+    pass "split output matches state"
+else
+    fail "mismatch between state and split output"
+fi
+message "trivially reconstructing state"
+tfsplit --action merge --dir z --state b.tfstate --serial-from a.tfstate
+tf state push b.tfstate
+if tf plan -detailed-exitcode; then
+    pass "plan was clean on reconstructed state"
+else
+    fail "plan on reconstructed state had differences"
+fi
+
+# Move a module out into its own project
+
+message "creating new project to refactor"
+cp -a $dir/00 $dir/01
+cd $dir/01
+rm -rf *.tfstate* .terraform* out.* a.tf
+rm -f auto/direct* auto/mod1-[01]-* auto/mod1-a-[01ab]-* auto/mod1-a-single
+mv mod x
+mv x/* .
+rmdir x
+cat > a.tfvars <<EOF
+prefix = "mod1"
+key    = "mod1 key"
+value  = "mod1 value"
+other  = "mod1 other"
+EOF
+message "creating new state"
+tfsplit --action merge --dir z/module.single_mod --state a.tfstate
+tf init
+tf state push a.tfstate
+if tf plan -detailed-exitcode -var-file=a.tfvars; then
+    pass "plan was clean after refactor"
+else
+    fail "plan had difference after refactor"
+fi
+
+printf "\e[35mPASSES: $passes, FAILS: $fails\e[0m\n"
+
+if [[ $fails == 0 ]]; then
+    pass "All tests passed"
+else
+    fail "Some tests failed"
+    exit 2
+fi
