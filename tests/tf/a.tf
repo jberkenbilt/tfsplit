@@ -1,28 +1,22 @@
-data "template_file" "single_data" {
-  template = "$${key} = $${value}; other=$${other}\n"
-
-  vars = {
-    key   = "some key"
-    value = "some value"
-    other = "some other"
-  }
+data "local_file" "input" {
+  filename = "${path.module}/input"
 }
 
 resource "local_file" "single_file" {
-  filename = "auto/template"
-  content  = data.template_file.single_data.rendered
+  filename = "auto/direct"
+  content  = data.local_file.input.content
 }
 
 resource "local_file" "count_file" {
   count    = 2
-  filename = "auto/template-${count.index}"
-  content  = data.template_file.single_data.rendered
+  filename = "auto/direct-${count.index}"
+  content  = "count=${count.index}\n"
 }
 
 resource "local_file" "foreach_file" {
   for_each = { a : "x", b : "y" }
-  filename = "auto/template-${each.key}-${each.value}"
-  content  = data.template_file.single_data.rendered
+  filename = "auto/direct-${each.key}-${each.value}"
+  content  = "key=${each.key}, value=${each.value}\n"
 }
 
 output "name" {

@@ -3,31 +3,25 @@ variable "value" {}
 variable "other" {}
 variable "prefix" {}
 
-data "template_file" "mod_single_data" {
-  template = "$${key} = $${value}; other=$${other}\n"
-
-  vars = {
-    key   = var.key
-    value = var.value
-    other = var.other
-  }
+data "local_file" "input" {
+  filename = "${path.module}/input"
 }
 
 resource "local_file" "mod_single_file" {
-  filename = "auto/${var.prefix}"
-  content  = data.template_file.mod_single_data.rendered
+  filename = "auto/${var.prefix}-single"
+  content  = "prefix=${var.prefix}: ${data.local_file.input.content}"
 }
 
 resource "local_file" "mod_count_file" {
   count    = 2
   filename = "auto/${var.prefix}-${count.index}"
-  content  = data.template_file.mod_single_data.rendered
+  content  = "prefix=${var.prefix}: count=${count.index}\n"
 }
 
 resource "local_file" "mod_foreach_file" {
   for_each = { a : "x", b : "y" }
   filename = "auto/${var.prefix}-${each.key}-${each.value}"
-  content  = data.template_file.mod_single_data.rendered
+  content  = "prefix=${var.prefix}: key=${each.key}, value=${each.value}\n"
 }
 
 output "name" {
